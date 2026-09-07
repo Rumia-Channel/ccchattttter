@@ -13,7 +13,7 @@ jobs:
     runs-on: windows-latest
     environment: code-signing
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Check tag matches Cargo.toml version
@@ -44,7 +44,13 @@ jobs:
           Copy-Item old/readme.txt, old/update.txt, 'old/チャタリングについて.txt' $dir/
           Compress-Archive -Path $dir -DestinationPath "$dir.zip"
           "ASSET=$dir.zip" >> $env:GITHUB_ENV
-
-      - uses: softprops/action-gh-release@v2
-        with:
-          files: ${{ env.ASSET }}
+      - name: Publish to Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "${{ github.ref_name }}" *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create "${{ github.ref_name }}" --title "${{ github.ref_name }}" --generate-notes
+          }
+          gh release upload "${{ github.ref_name }}" "$env:ASSET" --clobber
