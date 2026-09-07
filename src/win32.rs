@@ -9,12 +9,19 @@ use std::sync::atomic::{AtomicIsize, Ordering};
 use windows::Win32::Foundation::{HWND, LPARAM};
 use windows::Win32::System::Threading::GetCurrentProcessId;
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetWindowTextW, GetWindowThreadProcessId, IsWindow, SetWindowPos,
-    SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW,
+    EnumWindows, GetWindowTextW, GetWindowThreadProcessId, IsWindow, IsWindowVisible,
+    SetWindowPos, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+    SWP_SHOWWINDOW,
 };
 use windows::core::BOOL;
 
 static MAIN_HWND: AtomicIsize = AtomicIsize::new(0);
+/// set_main_window_visible で最後に要求した可視状態。GPUI の裏で隠しているため
+/// GPUI 自身はこれを知らず、スリープ復帰時の WM_DISPLAYCHANGE 等で
+/// ShowWindow(SW_SHOWNORMAL) して再表示してしまう (gpui 0.2.2 events.rs
+/// handle_display_change_msg)。番犬がこの意図値とのずれを戻す。
+static WANT_VISIBLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(true);
 
 fn title_utf16() -> Vec<u16> {
     "ccchattttter".encode_utf16().collect()
@@ -52,8 +59,14 @@ fn main_hwnd() -> Option<HWND> {
     (v != 0).then(|| HWND(v as *mut core::ffi::c_void))
 }
 
-/// メインウィンドウの表示/非表示を切り替える。
+/// メインウィンドウの表示/非表示を切り替える。要求値を WANT_VISIBLE に記録し、
+/// 番犬スレッドが GPUI 側の意図せぬ再表示をこの値へ戻す。
 pub fn set_main_window_visible(show: bool) {
+    WANT_VISIBLE.store(show, Ordering::Release);
+    apply_visible(show);
+}
+
+fn apply_visible(show: bool) {
     if let Some(h) = main_hwnd() {
         unsafe {
             let _ = SetWindowPos(
@@ -68,4 +81,35 @@ pub fn set_main_window_visible(show: bool) {
             );
         }
     }
+}
+
+fn is_main_window_visible() -> bool {
+    match main_hwnd() {
+        Some(h) => unsafe { IsWindowVisible(h) }.as_bool(),
+        None => false,
+    }
+}
+
+/// 意図値とのずれを戻す。格納意図なのに可視になっていたら隠し直す。
+/// 逆方向 (表示意図なのに不可視) は触らない: 表示要求直後の一時状態と
+/// 区別できないため。
+pub fn enforce_intended_visibility() {
+    if !WANT_VISIBLE.load(Ordering::Acquire) && is_main_window_visible() {
+        apply_visible(false);
+    }
+}
+
+/// 可視状態の番犬を開始する (多重呼び出し安全)。500ms 毎の IsWindowVisible
+/// ポーリング 1 回分で、キャッシュヒット時は syscall 2〜3 発程度。
+pub fn spawn_visibility_watchdog() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        std::thread::Builder::new()
+            .name("visibility-watchdog".into())
+            .spawn(|| loop {
+                std::thread::sleep(std::time::Duration::from_millis(500));
+                enforce_intended_visibility();
+            })
+            .expect("spawn visibility watchdog");
+    });
 }

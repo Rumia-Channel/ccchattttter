@@ -229,6 +229,8 @@ fn main() {
         // いったん明示的に表示してから、起動時はトレイへ格納する
         let _ = handle.update(cx, |_, window, _| window.activate_window());
         win32::set_main_window_visible(false);
+        // スリープ復帰時の WM_DISPLAYCHANGE 等で GPUI が ShowWindow し直すため番犬で隠し直す
+        win32::spawn_visibility_watchdog();
 
         let entity = handle.entity(cx).expect("root entity");
         cx.set_global(ui::Session {

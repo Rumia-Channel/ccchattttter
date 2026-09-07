@@ -1,0 +1,49 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    environment: code-signing
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Check tag matches Cargo.toml version
+        shell: pwsh
+        run: |
+          $ver = (Select-String '^version = "(.*)"' Cargo.toml).Matches.Groups[1].Value
+          if ("v$ver" -ne "${{ github.ref_name }}") {
+            throw "tag ${{ github.ref_name }} does not match Cargo.toml version $ver"
+          }
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Sign Windows binary
+        # tag がなく SHA 固定 (Rumia-Channel/windows-certum-signin@2105733 …の時点)
+        uses: Rumia-Channel/windows-certum-signin@21057330da939b2dd81c513da8553a4bd0a842e5
+        with:
+          certum-username: ${{ secrets.CERTUM_USERNAME }}
+          certum-otp-uri: ${{ secrets.CERTUM_OTP_URI }}
+          certum-key-id: ${{ vars.CERTUM_KEY_ID }}
+          files: target/release/ccchattttter.exe
+      - name: Package
+        shell: pwsh
+        run: |
+          $dir = "ccchattttter-${{ github.ref_name }}-windows-x64"
+          New-Item -ItemType Directory $dir | Out-Null
+          Copy-Item target/release/ccchattttter.exe, README.md $dir/
+          Compress-Archive -Path $dir -DestinationPath "$dir.zip"
+          "ASSET=$dir.zip" >> $env:GITHUB_ENV
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.ASSET }}
