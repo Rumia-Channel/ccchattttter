@@ -41,6 +41,7 @@ jobs:
           $dir = "ccchattttter-${{ github.ref_name }}-windows-x64"
           New-Item -ItemType Directory $dir | Out-Null
           Copy-Item target/release/ccchattttter.exe, README.md $dir/
+          Copy-Item old/readme.txt, old/update.txt, 'old/チャタリングについて.txt' $dir/
           Compress-Archive -Path $dir -DestinationPath "$dir.zip"
           "ASSET=$dir.zip" >> $env:GITHUB_ENV
 
